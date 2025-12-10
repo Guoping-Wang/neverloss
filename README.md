@@ -100,3 +100,70 @@ ssh-keygen -t ed25519 -C "your_email@example.com"
 
 ### 2. 或直接在线运行
 curl -fsSL https://github.com/Guoping-Wang/neverloss/main/install_sg_workflow.sh | bash
+
+
+# Remote Tmux Workflow / 远程 Tmux 工作流
+
+> Make remote servers feel (almost) like local dev.  
+> 让远程服务器开发，尽量长得像本地写代码。
+
+---
+
+- [English](#english)
+- [简体中文](#简体中文)
+
+---
+
+## English
+
+### What is this?
+
+This repo contains a small but opinionated workflow for working on **remote Linux servers with tmux**, driven from your **local laptop** (macOS / Linux / Windows + Git Bash / WSL).
+
+You get a set of short commands:
+
+- `sgn` – “start / go to project”
+- `ssr` – “resume tmux after disconnect”
+- `sgs` – “SSH only, no tmux”
+- `sgl` – “list & attach sessions”
+- `sgk` – “kill sessions”
+- `sgd` – “server dashboard”
+- `sgw` – “work mode: project + maintenance”
+
+Core idea:  
+> Treat **each project directory** on the server as **one tmux session**, auto‑named and auto‑laid‑out, and let your laptop drive all the boring parts.
+
+---
+
+### Features
+
+- 🧠 **Remembers your last project**  
+  `sgn project-name` once → later只用 `sgn` 就可以回去。
+
+- 💥 **Survives sleep & Wi‑Fi drops**  
+  Training / simulation keeps running in tmux; `ssr` re‑attaches when you’re back.
+
+- 🧩 **Project‑centric sessions**  
+  The tmux session name = sanitized directory name (`~/ai/my-awesome-project` → `myawesomeproject`), layout is automatic.
+
+- 🖥️ **Dashboard for free**  
+  `sgd` prints host, uptime, memory, disk, tmux sessions, and GPU (if `nvidia-smi` exists).
+
+- 🍏 **macOS multi‑tab integration (optional)**  
+  `sgl` / `sgw` can open new tabs in Terminal.app using AppleScript.  
+  On Linux / WSL, it just falls back to attaching in the current window.
+
+---
+
+### Repository layout
+
+Recommended structure:
+
+```text
+remote-tmux-workflow/
+├── README.md                # this file
+├── install_sg_workflow.sh   # local one‑shot installer
+├── remote/
+│   └── layout_by_dir.sh     # remote tmux layout script
+└── LICENSE                  # optional: MIT or anything you like
+
