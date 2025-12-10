@@ -1,0 +1,511 @@
+1. 教程简介
+
+标题建议：
+「远程开发工作流统一方案：一键进入项目 / 自动恢复 / 不怕断线（支持 Mac / Windows / 任意服务器）」
+
+这套东西能帮你做什么？
+
+配置好后，你只需要记住几个命令：
+
+命令	作用
+sgn project_name	进入 / 创建远程项目工作区（自动 tmux、自动布局）
+sgn	直接回到上一次的项目工作区
+ssr	断网 / 睡眠后，恢复上一次 tmux 会话
+sgs	只登录服务器，不进任何 tmux（维护 / 改配置用）
+sgl	列出远程所有 tmux 会话，可以多选，为每个开一个本地终端 tab（Mac）
+sgk	批量关闭不用的 tmux 会话
+sgd	查看服务器目前状态（CPU / 内存 / 磁盘 / tmux / GPU）
+sgw project	一键开两个终端：左边工作用 tmux，右边维护用纯 SSH
+
+典型场景：
+	•	在服务器上跑训练 / 仿真，不想因为笔记本合盖 / 断网而丢进度
+	•	同时维护多个项目，每个项目一个独立工作区
+	•	团队之间互相切换服务器，想统一一套「上来就能干活」的操作
+
+⸻
+
+2. 使用前准备（所有人都必须做）
+
+2.1 确认你有：
+	•	一台自己的电脑（Mac / Windows / Linux）
+	•	至少一台可登录的远程 Linux 服务器：
+	•	有用户名（如 alice）
+	•	有 IP 或域名（如 1.2.3.4 或 gpu1.company.com）
+	•	可以用密码登录一次
+
+2.2 建议的本地终端工具
+	•	Mac：直接用系统自带 Terminal，或者 iTerm2
+	•	Windows：
+	•	安装 [Git for Windows]，用 Git Bash 终端
+	•	或者用 WSL2（Ubuntu）+ Windows Terminal
+
+非常重要：下面的命令都假设你是在 bash 或 zsh 里操作
+（Git Bash / WSL / macOS 默认都可以）
+
+⸻
+
+3. 🌈 选项 A：完全小白「界面 + 手把手操作版」
+
+适合：完全不会写脚本、刚学命令行的同事。
+思路：你照着一步步做就行，不需要理解为什么。
+
+⸻
+
+A.1 第一步：在本地生成 SSH 密钥（只做一次）
+
+打开终端（Mac Terminal / Git Bash / WSL），输入：
+
+ssh-keygen -t ed25519 -C "你自己的邮箱"
+
+一路按回车即可（默认保存在 ~/.ssh/id_ed25519）。
+
+生成后，查看你自己的公钥：
+
+cat ~/.ssh/id_ed25519.pub
+
+你会看到一整行类似：
+
+ssh-ed25519 AAAAC3Nz...一串很长...  yourname@computer
+
+把这整一行复制下来（从 ssh-ed25519 开始，不要多空格、不要换行）。
+
+⸻
+
+A.2 第二步：把公钥放到远程服务器（每台服务器做一次）
+	1.	用密码登录你的服务器（把 username 和 server 换成自己的）：
+
+ssh username@server
+
+
+	2.	登录后，在服务器上创建 .ssh 目录：
+
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+
+	3.	创建 / 编辑 authorized_keys：
+
+nano ~/.ssh/authorized_keys
+
+
+	4.	在编辑器里：
+	•	把你刚刚从本地复制的那一整行公钥粘贴进去
+	•	按 Ctrl + O 回车保存
+	•	按 Ctrl + X 退出
+	5.	设置权限：
+
+chmod 600 ~/.ssh/authorized_keys
+
+
+	6.	退出服务器：
+
+exit
+
+
+	7.	在本地测试是否可以免密码登录：
+
+ssh username@server
+
+✅ 如果没有要求输入密码 → 成功
+❌ 如果还要密码 → 找你们组里懂一点 Linux 的人帮你看下 ~/.ssh/authorized_keys 里是不是贴对了。
+
+⸻
+
+A.3 第三步：检查服务器上是否安装了 tmux
+
+用刚才的命令登录服务器：
+
+ssh username@server
+
+然后在服务器上输入：
+
+tmux -V
+
+	•	如果有输出类似 tmux 3.2a → OK
+	•	如果提示「command not found」，用：
+
+# Ubuntu / Debian:
+sudo apt update && sudo apt install tmux -y
+
+# CentOS / RHEL:
+sudo yum install tmux -y
+
+
+
+没有 sudo 权限就让管理员帮你装一下。
+
+⸻
+
+A.4 第四步：在服务器上创建统一布局脚本（自动两 pane 等）
+
+在服务器上执行：
+
+mkdir -p ~/.tmux
+nano ~/.tmux/layout_by_dir.sh
+
+粘贴下面内容（你们可以根据需要微调）：
+
+#!/usr/bin/env bash
+set -e
+
+TMUX_BIN=$(command -v tmux)
+session=$(basename "$PWD")
+
+if ! "$TMUX_BIN" has-session -t "$session" 2>/dev/null; then
+  "$TMUX_BIN" new-session -d -s "$session" -c "$PWD"
+  "$TMUX_BIN" split-window -h -t "$session" -c "$PWD"
+  "$TMUX_BIN" select-layout -t "$session" even-horizontal
+fi
+
+exec "$TMUX_BIN" attach -t "$session"
+
+保存退出后：
+
+chmod +x ~/.tmux/layout_by_dir.sh
+
+
+⸻
+
+A.5 第五步：在本地电脑配置命令（最关键的一步）
+
+目标：在本地敲这些命令：
+	•	sgn project → 自动登录 + 打开/创建 tmux project
+	•	ssr → 恢复上一次 tmux
+	•	sgs → 只登录，不进 tmux
+	•	sgl / sgk / sgd / sgw → 高级功能
+
+1️⃣ 确认使用的是哪种 shell
+
+在本地终端执行：
+
+echo $SHELL
+
+	•	如果输出里有 zsh → 用 ~/.zshrc
+	•	如果输出里有 bash → 用 ~/.bashrc 或 ~/.bash_profile（Mac 上通常是 ~/.bash_profile）
+
+下面以「你用的是 bash」为例，如果是 zsh，把文件名换成 ~/.zshrc 即可。
+
+2️⃣ 编辑配置文件
+
+nano ~/.bash_profile
+
+把下面这一整段「模板」贴进去（⚠️ 有几处需要改成你自己的服务器信息）：
+
+########################################
+# 基本配置（所有人都一样，直接复制）
+########################################
+
+alias reload='source ~/.bash_profile'
+alias ll='ls -lh'
+
+# 最近一次 project 的记录文件
+LAST_PROJ_FILE="$HOME/.sg_last_project"
+
+########################################
+# 1. 请在下面三行换成你自己的服务器配置
+########################################
+REMOTE_USER="你的服务器用户名"
+REMOTE_HOST="你的服务器地址或 IP，比如 gpu1.company.com"
+SSH_KEY="$HOME/.ssh/id_ed25519"   # 如果你用默认的 ssh-keygen，可以不用改
+
+REMOTE="$REMOTE_USER@$REMOTE_HOST"
+
+# 远程 tmux 命令（大多数服务器 tmux 在 PATH 里，直接用名字即可）
+REMOTE_TMUX="tmux"
+
+# 远程环境（如果服务器上 tmux 不在 PATH，可以额外 export PATH）
+remote_env_prefix=""
+
+# 不带 TTY 的远程执行（非交互）
+_remote() {
+  /usr/bin/ssh -i "$SSH_KEY" "$REMOTE" "$@"
+}
+
+# 带 TTY 的远程执行（交互）
+_remote_t() {
+  /usr/bin/ssh -t -i "$SSH_KEY" "$REMOTE" "$@"
+}
+
+########################################
+# sgn — 进入项目工作区（自动记住上一次）
+########################################
+sgn() {
+  local PROJECT
+
+  if [ -n "$1" ]; then
+    PROJECT="$1"
+  elif [ -f "$LAST_PROJ_FILE" ]; then
+    PROJECT="$(cat "$LAST_PROJ_FILE")"
+    [ -n "$PROJECT" ] && echo "使用上一次的 project: $PROJECT"
+  fi
+
+  if [ -z "$PROJECT" ]; then
+    echo "没有 project 记录，请用: sgn <project_name>"
+    return 1
+  fi
+
+  echo "$PROJECT" > "$LAST_PROJ_FILE"
+
+  _remote_t "${remote_env_prefix} \
+mkdir -p ~/ai/${PROJECT} && cd ~/ai/${PROJECT} && \
+~/.tmux/layout_by_dir.sh"
+}
+
+########################################
+# ssr — 恢复最近的 tmux session
+########################################
+ssr() {
+  _remote_t "${remote_env_prefix} \
+${REMOTE_TMUX} attach || ${REMOTE_TMUX} new-session -A -s ai -c ~/ai"
+}
+
+########################################
+# sgs — 只登录服务器，不进 tmux（维护用）
+########################################
+sgs() {
+  echo "=== 远程 tmux sessions ==="
+  _remote "${remote_env_prefix} ${REMOTE_TMUX} ls 2>/dev/null || echo '  (none)'"
+  echo "=== 进入普通 SSH（不自动 tmux） ==="
+  _remote_t "${remote_env_prefix} TMUX=; \
+PS1='\u@\h:\w\$ '; export PS1; \
+exec bash --noprofile --norc"
+}
+
+########################################
+# sgl — 列出 tmux sessions，并为选中的开新 tab（Mac Terminal 专用）
+########################################
+sgl() {
+  local SESSIONS
+  SESSIONS=$(_remote "${remote_env_prefix} ${REMOTE_TMUX} ls -F '#S' 2>/dev/null") || SESSIONS=""
+
+  if [ -z "$SESSIONS" ]; then
+    echo "远程没有 tmux session."
+    return 0
+  fi
+
+  echo "当前远程 tmux sessions:"
+  local i=1
+  local arr=()
+  while IFS= read -r s; do
+    [ -z "$s" ] && continue
+    echo "  $i) $s"
+    arr[$i]="$s"
+    i=$((i+1))
+  done <<< "$SESSIONS"
+
+  echo
+  echo "输入要在新 tab 打开的序号（用空格分隔，比如: 1 3 4），然后回车："
+  read -r choices
+
+  local key="$SSH_KEY"
+  local user="$REMOTE_USER"
+  local host="$REMOTE_HOST"
+
+  for c in $choices; do
+    local name="${arr[$c]}"
+    [ -z "$name" ] && continue
+
+    /usr/bin/osascript <<EOF
+tell application "Terminal"
+  activate
+  do script "ssh -t -i '$key' '$user@$host' '$REMOTE_TMUX attach -t $name'"
+end tell
+EOF
+  done
+}
+
+########################################
+# sgk — 批量 kill tmux sessions
+########################################
+sgk() {
+  local SESSIONS
+  SESSIONS=$(_remote "${remote_env_prefix} ${REMOTE_TMUX} ls -F '#S' 2>/dev/null") || SESSIONS=""
+
+  if [ -z "$SESSIONS" ]; then
+    echo "远程没有 tmux session."
+    return 0
+  fi
+
+  echo "当前远程 tmux sessions:"
+  local i=1
+  local arr=()
+  while IFS= read -r s; do
+    [ -z "$s" ] && continue
+    echo "  $i) $s"
+    arr[$i]="$s"
+    i=$((i+1))
+  done <<< "$SESSIONS"
+
+  echo
+  echo "输入要 kill 的序号（空格分隔），然后回车："
+  read -r choices
+
+  for c in $choices; do
+    local name="${arr[$c]}"
+    [ -z "$name" ] && continue
+    echo "Killing session: $name"
+    _remote "${remote_env_prefix} ${REMOTE_TMUX} kill-session -t ${name}"
+
+    if [ -f "$LAST_PROJ_FILE" ]; then
+      last_proj=$(cat "$LAST_PROJ_FILE")
+      if [ "$last_proj" = "$name" ]; then
+        rm -f "$LAST_PROJ_FILE"
+        echo "已清除上一次项目记录: $name"
+      fi
+    fi
+  done
+}
+
+########################################
+# sgd — 打印服务器状态 Dashboard
+########################################
+sgd() {
+  _remote "${remote_env_prefix} \
+echo '=== HOST ==='; hostname; echo; \
+echo '=== UPTIME ==='; uptime; echo; \
+echo '=== MEMORY ==='; free -h 2>/dev/null; echo; \
+echo '=== DISK / ==='; df -h / | sed -n '1,2p'; echo; \
+echo '=== TMUX SESSIONS ==='; ${REMOTE_TMUX} ls 2>/dev/null || echo '无 tmux session'; \
+if command -v nvidia-smi >/dev/null 2>&1; then \
+  echo; echo '=== GPU ==='; \
+  nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader; \
+fi"
+}
+
+########################################
+# sgw — 一键工作模式（工作 tab + 维护 tab，Mac 专用）
+########################################
+sgw() {
+  local PROJECT
+
+  if [ -n "\$1" ]; then
+    PROJECT="\$1"
+  elif [ -f "\$LAST_PROJ_FILE" ]; then
+    PROJECT="\$(cat "\$LAST_PROJ_FILE")"
+    [ -n "\$PROJECT" ] && echo "使用上一次的 project: \$PROJECT"
+  fi
+
+  if [ -z "\$PROJECT" ]; then
+    echo "请输入 project 名字："
+    read -r PROJECT
+  fi
+
+  echo "\$PROJECT" > "\$LAST_PROJ_FILE"
+
+  /usr/bin/osascript <<EOF
+tell application "Terminal"
+  activate
+  do script "bash -lc 'sgn \$PROJECT'"
+  do script "bash -lc 'sgs'"
+end tell
+EOF
+}
+
+保存退出（Ctrl + O 回车，Ctrl + X）。
+
+Windows + Git Bash/WSL：没有 AppleScript，sgl / sgw 那部分可以注释掉或无视，sgn/ssr/sgs/sgd/sgk 仍然全部可用。
+
+最后在本地终端执行：
+
+reload
+
+
+⸻
+
+A.6 第六步：教同事怎么用（你可以直接写在文档里）
+	1.	第一次进入项目：
+
+sgn myproject
+
+
+	2.	下次继续上一次项目：
+
+sgn
+
+
+	3.	断网 / 合盖后恢复：
+
+ssr
+
+
+	4.	维护服务器（不进 tmux）：
+
+sgs
+
+
+	5.	一次看所有 session：
+
+sgl       # Mac 才有多 tab 功能
+
+
+	6.	清理不用的 session：
+
+sgk
+
+
+	7.	看服务器状态：
+
+sgd
+
+
+	8.	一键开启「工作 + 维护」两 tab：
+
+sgw myproject
+
+
+
+⸻
+
+4. 🛠️ 选项 B：中级玩家「一键安装脚本」
+
+给会一点命令行、有多台服务器、或者想半自动化部署的人用。
+
+思路：你提供一个脚本，比如叫：
+
+install_sg_workflow.sh
+
+他们下载后：
+
+bash install_sg_workflow.sh
+
+脚本大概做：
+	1.	问：你的 shell 是 bash 还是 zsh？
+	2.	问：你的远程用户名、服务器地址是什么？
+	3.	检查 ~/.ssh/id_ed25519 是否存在，没有则自动 ssh-keygen
+	4.	提示用户把公钥贴到服务器（这一步可以半自动，但不强行）
+	5.	在本地生成一个 ~/.sg_workflow.sh，写入我们上面那整段配置（变量用它输入的）。
+	6.	自动在 ~/.bash_profile 或 ~/.zshrc 末尾加一行：
+
+[ -f "$HOME/.sg_workflow.sh" ] && source "$HOME/.sg_workflow.sh"
+
+
+
+因为这部分脚本比较长，如果你愿意，我可以在下一条消息 直接给出完整的 install_sg_workflow.sh 内容（包含问答交互、不同 OS 兼容、简单健壮性检查），你只要放到 Git 仓库或者直接发给同事用就行。
+
+⸻
+
+5. 常见问题 & Debug 思路（写给团队）
+
+你可以在教程最后附一页 FAQ，例如：
+	•	登录还要密码？
+	•	检查服务器上 ~/.ssh/authorized_keys 是否存在且权限是 600
+	•	公钥是否贴完整（一整行）
+	•	本地 ssh -i ~/.ssh/id_ed25519 username@server 能否免密
+	•	tmux: command not found？
+	•	在服务器上执行 tmux -V 看是否安装
+	•	没装请管理员安装：sudo apt install tmux -y
+	•	sgn 说「没有 project 记录」？
+	•	第一次必须 sgn myproject 带名字
+	•	后面才可以直接 sgn
+	•	杀了某个 session 后，sgn 还会复活它？
+	•	我们已经在 sgk 里加了同步逻辑：kill 当前 last project 的 session 时，会自动清理本地记忆。
+	•	如果你手动用 tmux kill-session，可以手动清：rm ~/.sg_last_project
+
+⸻
+
+如果你愿意，下一步我可以：
+	•	真正写出一个 完整可用的 install_sg_workflow.sh 一键脚本版（含交互）。
+	•	再给你一版「整理好的 Markdown」版本，直接粘到 Notion / 飞书文档。
+
+你可以先看这版结构感受一下：
+如果你觉得「是的，这个层次就对了、小白同事也看得懂」，我再在这个基础上帮你把脚本版本补上。
